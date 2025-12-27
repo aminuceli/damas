@@ -7,7 +7,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'damas_lobby_secret'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode=None)
 
-# Estrutura: { 'ABCD': { 'p1': 'id...', 'p2': None } }
+# Armazena as salas: { 'ABCD': { 'p1': 'id...', 'p2': None } }
 rooms = {}
 
 def generate_room_code():

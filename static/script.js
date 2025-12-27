@@ -16,12 +16,12 @@ const audioEffects = {
     lose: new Audio('/static/sounds/lose.mp3')
 };
 
-// Função auxiliar para tocar sons sem erro (caso o navegador bloqueie)
+// Função auxiliar para tocar sons
 function playSound(type) {
     const audio = audioEffects[type];
     if (audio) {
-        audio.currentTime = 0; // Reinicia o som se já estiver tocando
-        audio.play().catch(error => console.log("Erro ao reproduzir áudio:", error));
+        audio.currentTime = 0; 
+        audio.play().catch(error => {}); // Ignora erro se navegador bloquear
     }
 }
 
@@ -47,8 +47,9 @@ let myColor = null;
 let isMyTurn = false;
 let boardState = []; 
 let currentRoom = "";
+let isSinglePlayer = false; // Flag para modo Bot
 
-// -- Regras e Engine --
+// -- Regras --
 let allowedMoves = {}; 
 let mustCaptureWith = null;
 
@@ -70,11 +71,10 @@ const initialBoard = [
 ];
 
 // =============================================================================
-// 2. LÓGICA DO LOBBY (CRIAR / ENTRAR SALA)
+// 2. LÓGICA DO LOBBY (ONLINE & BOT)
 // =============================================================================
 
 socket.on('connect', () => {
-    console.log("Conectado!");
     if(lobbyStatus) lobbyStatus.innerText = "Conectado ao servidor.";
 });
 
@@ -86,6 +86,27 @@ function joinRoom(roomCode) {
     socket.emit('join_game', { room_code: roomCode });
 }
 
+// --- FUNÇÃO PARA INICIAR JOGO CONTRA BOT ---
+function startBotGame() {
+    isSinglePlayer = true;
+    currentRoom = "LOCAL_BOT";
+    myColor = "red"; // Jogador sempre é Vermelho
+    isMyTurn = true; // Jogador começa
+
+    // Setup Visual
+    if(lobbyScreen) lobbyScreen.classList.add('hidden');
+    if(gameScreen) gameScreen.classList.remove('hidden');
+    hideGameOverModal();
+
+    // Reset Board
+    boardState = JSON.parse(JSON.stringify(initialBoard));
+    
+    updateTextStatus("SUA VEZ (vs BOT)", true);
+    allowedMoves = calculateAllowedMoves(boardState, myColor);
+    renderBoard();
+}
+
+// --- Respostas do Servidor (Multiplayer) ---
 socket.on('update_room_list', (rooms) => {
     if(roomsContainer) {
         roomsContainer.innerHTML = ''; 
@@ -122,7 +143,7 @@ socket.on('error_msg', (msg) => {
 // =============================================================================
 
 socket.on('init_game', (data) => {
-    console.log("JOGO INICIADO:", data);
+    isSinglePlayer = false;
     
     if(lobbyScreen) lobbyScreen.classList.add('hidden');
     if(waitingScreen) waitingScreen.classList.add('hidden');
@@ -134,17 +155,9 @@ socket.on('init_game', (data) => {
     currentRoom = data.room;
     isMyTurn = data.turn;
 
-    const myInput = document.getElementById('myPieceColor');
-    const oppInput = document.getElementById('oppPieceColor');
-    if(myInput && oppInput) {
-        myInput.value = (myColor === 'red') ? '#c0392b' : '#ecf0f1';
-        oppInput.value = (myColor === 'red') ? '#ecf0f1' : '#c0392b';
-        if(typeof updatePieceColors === 'function') updatePieceColors(); 
-    }
-
     if(isMyTurn) {
         updateTextStatus("SUA VEZ", true);
-        allowedMoves = calculateAllowedMoves(boardState);
+        allowedMoves = calculateAllowedMoves(boardState, myColor);
         if (hasAnyCaptureRequired()) updateTextStatus('SUA VEZ (CAPTURA OBRIGATÓRIA!)', true);
     } else {
         updateTextStatus("VEZ DO OPONENTE", false);
@@ -154,22 +167,23 @@ socket.on('init_game', (data) => {
     renderBoard();
 });
 
-// Recebe Jogada do Oponente
+// Recebe Jogada do Oponente (Ou processa a do Bot)
 socket.on('opponent_move', (data) => {
-    const move = data.move || data; 
-    
-    // 1. Aplica movimento lógico
+    if(isSinglePlayer) return; // Ignora se estiver jogando local
+    processOpponentMove(data.move || data);
+});
+
+// --- Processa Jogada (Usado para Oponente Online e para Bot) ---
+function processOpponentMove(move) {
     const piece = boardState[move.from.row][move.from.col];
     boardState[move.from.row][move.from.col] = null;
     boardState[move.to.row][move.to.col] = piece;
 
-    // 2. Remove Captura
     if(move.type === 'capture') {
          const dirR = move.to.row > move.from.row ? 1 : -1;
          const dirC = move.to.col > move.from.col ? 1 : -1;
          let r = move.from.row + dirR;
          let c = move.from.col + dirC;
-         
          while(r !== move.to.row && c !== move.to.col) {
              if(boardState[r][c] !== null) boardState[r][c] = null;
              r += dirR; c += dirC;
@@ -177,60 +191,281 @@ socket.on('opponent_move', (data) => {
          }
     }
 
-    // 3. Promoção
+    let promoted = move.promoted;
     if (move.promoted) {
-        const opponentKing = (myColor === 'red') ? 'WK' : 'RK';
-        boardState[move.to.row][move.to.col] = opponentKing;
+        const kingVal = (myColor === 'red') ? 'WK' : 'RK';
+        boardState[move.to.row][move.to.col] = kingVal;
     }
 
-    // --- EFEITOS SONOROS (Oponente) ---
-    if (move.promoted) playSound('king');
+    // Sons
+    if (promoted) playSound('king');
     else if (move.type === 'capture') playSound('capture');
     else playSound('move');
 
-    // 4. Verifica Fim
     if (checkNoPiecesGameOver()) return;
 
-    // 5. Turno
     if (move.keepTurn) {
         updateTextStatus("OPONENTE EM COMBO...", false);
         isMyTurn = false;
+        // Se for BOT, ele continua
+        if(isSinglePlayer) setTimeout(() => botTurn(true, {row: move.to.row, col: move.to.col}), 1000);
     } else {
         isMyTurn = true;
         mustCaptureWith = null;
         updateTextStatus("SUA VEZ", true);
         
-        allowedMoves = calculateAllowedMoves(boardState);
+        allowedMoves = calculateAllowedMoves(boardState, myColor);
         
         if(Object.keys(allowedMoves).length === 0) {
-            socket.emit('game_over', { room: currentRoom, winner: opponentColor(myColor), reason: 'Sem movimentos.' });
-            showGameOverModal(false, "Você ficou sem movimentos.");
+            handleLocalGameOver(false, "Você ficou sem movimentos.");
         } else {
              if (hasAnyCaptureRequired()) updateTextStatus('SUA VEZ (CAPTURA OBRIGATÓRIA!)', true);
         }
     }
     renderBoard();
-});
+}
 
-// Eventos de Fim de Jogo
-socket.on('opponent_left', (data) => {
-    showGameOverModal(true, "Oponente saiu da sala.");
-});
+// --- Execução Local (Minha Jogada) ---
+function executeGameMove(fromRow, fromCol, moveData) {
+    const piece = boardState[fromRow][fromCol];
+    boardState[fromRow][fromCol] = null;
+    boardState[moveData.to.row][moveData.to.col] = piece;
 
-socket.on('game_over', (data) => {
-    if(data.winner === myColor) showGameOverModal(true, "Oponente sem peças/movimentos.");
-    else showGameOverModal(false, "Você perdeu.");
-    isMyTurn = false;
-});
+    if (moveData.type === 'capture') {
+        const dirR = moveData.to.row > fromRow ? 1 : -1;
+        const dirC = moveData.to.col > fromCol ? 1 : -1;
+        let r = fromRow + dirR;
+        let c = fromCol + dirC;
+        while(r !== moveData.to.row) {
+            if(boardState[r][c] !== null) boardState[r][c] = null;
+            r += dirR; c += dirC;
+            if(r < 0 || r > 7 || c < 0 || c > 7) break;
+        }
+    }
 
-socket.on('disconnect', () => {
-    updateTextStatus("Conexão perdida...", false);
-    if(statusDiv) statusDiv.style.color = "red";
-});
+    let nextMoves = calculateAllowedMoves(boardState, myColor, {row: moveData.to.row, col: moveData.to.col});
+    let hasCombo = false;
+    const nextKey = `${moveData.to.row}-${moveData.to.col}`;
+    
+    if(moveData.type === 'capture' && nextMoves[nextKey] && nextMoves[nextKey].some(m => m.type === 'capture')) {
+        hasCombo = true;
+    }
 
+    let promoted = false;
+    const isKingAlready = piece.includes('K');
+    const promotionRow = (myColor === 'red') ? 7 : 0;
+    
+    // REGRA DAMA IMEDIATA: Tocou a linha, vira Dama (mesmo em combo)
+    if (!isKingAlready && moveData.to.row === promotionRow) {
+        const kingVal = (myColor === 'red') ? 'RK' : 'WK';
+        boardState[moveData.to.row][moveData.to.col] = kingVal;
+        promoted = true;
+    }
+
+    // Sons
+    if (promoted) playSound('king');
+    else if (moveData.type === 'capture') playSound('capture');
+    else playSound('move');
+
+    // Envia ao servidor se Online
+    if(!isSinglePlayer) {
+        socket.emit('make_move', {
+            room: currentRoom,
+            move: {
+                from: { row: fromRow, col: fromCol },
+                to: { row: moveData.to.row, col: moveData.to.col },
+                type: moveData.type,
+                promoted: promoted,
+                keepTurn: hasCombo
+            }
+        });
+    }
+
+    if (hasCombo) {
+        mustCaptureWith = { row: moveData.to.row, col: moveData.to.col };
+        allowedMoves = nextMoves; 
+        updateTextStatus("COMBO! Jogue novamente.", true);
+        renderBoard();
+    } else {
+        isMyTurn = false;
+        mustCaptureWith = null;
+        allowedMoves = {};
+        
+        if(isSinglePlayer) {
+            updateTextStatus("BOT PENSANDO...", false);
+            renderBoard(); 
+            setTimeout(() => botTurn(), 1000); 
+        } else {
+            updateTextStatus("AGUARDANDO OPONENTE...", false);
+            renderBoard();
+        }
+    }
+    
+    if (checkNoPiecesGameOver()) return;
+}
 
 // =============================================================================
-// 4. ENGINE DE REGRAS E RENDERIZAÇÃO
+// 4. LÓGICA DO BOT
+// =============================================================================
+
+function botTurn(isCombo = false, specificPiece = null) {
+    if(checkNoPiecesGameOver()) return;
+
+    const botColor = (myColor === 'red') ? 'white' : 'red';
+    
+    let possibleMoves = calculateAllowedMoves(boardState, botColor, specificPiece);
+    
+    let allMoves = [];
+    Object.keys(possibleMoves).forEach(key => {
+        const [r, c] = key.split('-').map(Number);
+        possibleMoves[key].forEach(move => {
+            allMoves.push({
+                from: {row: r, col: c},
+                to: move.to,
+                type: move.type,
+                promoted: false 
+            });
+        });
+    });
+
+    if(allMoves.length === 0) {
+        handleLocalGameOver(true, "Bot não tem movimentos.");
+        return;
+    }
+
+    const randomMove = allMoves[Math.floor(Math.random() * allMoves.length)];
+
+    const piece = boardState[randomMove.from.row][randomMove.from.col];
+    const isKingAlready = piece.includes('K');
+    const botPromotionRow = (botColor === 'red') ? 7 : 0;
+    
+    if (!isKingAlready && randomMove.to.row === botPromotionRow) {
+        randomMove.promoted = true;
+    }
+
+    // Simulação rápida para verificar combo do Bot
+    let tempBoard = JSON.parse(JSON.stringify(boardState));
+    tempBoard[randomMove.from.row][randomMove.from.col] = null;
+    tempBoard[randomMove.to.row][randomMove.to.col] = piece;
+    
+    if(randomMove.type === 'capture') {
+        const dirR = randomMove.to.row > randomMove.from.row ? 1 : -1;
+        const dirC = randomMove.to.col > randomMove.from.col ? 1 : -1;
+        let r = randomMove.from.row + dirR;
+        let c = randomMove.from.col + dirC;
+        while(r !== randomMove.to.row) {
+             tempBoard[r][c] = null;
+             r += dirR; c += dirC;
+             if(r < 0 || r > 7 || c < 0 || c > 7) break;
+        }
+    }
+    
+    let futureMoves = calculateAllowedMoves(tempBoard, botColor, {row: randomMove.to.row, col: randomMove.to.col});
+    let nextKey = `${randomMove.to.row}-${randomMove.to.col}`;
+    let willHaveCombo = (randomMove.type === 'capture' && futureMoves[nextKey] && futureMoves[nextKey].some(m => m.type === 'capture'));
+
+    randomMove.keepTurn = willHaveCombo;
+
+    processOpponentMove(randomMove);
+}
+
+// =============================================================================
+// 5. ENGINE DE REGRAS E CALCULOS
+// =============================================================================
+
+function calculateAllowedMoves(currentState, activeColor, specificPiece = null) {
+    let moves = {}; 
+    let maxCaptures = 0;
+
+    for(let r=0; r<8; r++){
+        for(let c=0; c<8; c++){
+            const p = currentState[r][c];
+            if(!p) continue;
+            
+            const isRedPiece = p.startsWith('R');
+            const isMyPiece = (activeColor === 'red' && isRedPiece) || (activeColor === 'white' && !isRedPiece);
+            if(!isMyPiece) continue;
+
+            if(specificPiece && (r !== specificPiece.row || c !== specificPiece.col)) continue;
+
+            const possible = getPieceMoves(currentState, r, c, p, activeColor);
+            if(possible.length > 0) {
+                possible.forEach(m => {
+                    if(m.type === 'capture') {
+                        m.chainLength = 1 + getMaxChain(currentState, m.to.row, m.to.col, m.capturedRow, m.capturedCol, p, activeColor);
+                    } else { m.chainLength = 0; }
+                    
+                    if(m.chainLength > maxCaptures) maxCaptures = m.chainLength;
+                    const key = `${r}-${c}`;
+                    if(!moves[key]) moves[key] = [];
+                    moves[key].push(m);
+                });
+            }
+        }
+    }
+
+    let finalMoves = {};
+    Object.keys(moves).forEach(key => {
+        const validOptions = moves[key].filter(m => m.chainLength === maxCaptures);
+        if(maxCaptures > 0) {
+             if(validOptions.length > 0 && validOptions[0].type === 'capture') finalMoves[key] = validOptions;
+        } else {
+             if(validOptions.length > 0) finalMoves[key] = validOptions;
+        }
+    });
+    return finalMoves;
+}
+
+function getMaxChain(board, r, c, ignoreR, ignoreC, pieceValue, activeColor) {
+    const moves = getPieceMoves(board, r, c, pieceValue, activeColor);
+    const captures = moves.filter(m => m.type === 'capture' && (m.capturedRow !== ignoreR || m.capturedCol !== ignoreC));
+    return captures.length > 0 ? 1 : 0;
+}
+
+function getPieceMoves(board, r, c, piece, activeColor) {
+    let moves = [];
+    const isKing = piece.includes('K');
+    const isRed = piece.startsWith('R');
+    const directions = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
+
+    directions.forEach(dir => {
+        let dist = 1;
+        while(true) {
+            const tr = r + (dir[0] * dist);
+            const tc = c + (dir[1] * dist);
+            if(tr < 0 || tr > 7 || tc < 0 || tc > 7) break;
+            const target = board[tr][tc];
+
+            if(target === null) {
+                if(!isKing) {
+                    const moveDir = isRed ? 1 : -1;
+                    if(dir[0] === moveDir && dist === 1) moves.push({to: {row: tr, col: tc}, type: 'simple'});
+                } else { moves.push({to: {row: tr, col: tc}, type: 'simple'}); }
+            } else {
+                const isEnemy = (isRed && target.startsWith('W')) || (!isRed && target.startsWith('R'));
+                if(isEnemy) {
+                    let landDist = dist + 1;
+                    while(true) {
+                        const landR = r + (dir[0] * landDist);
+                        const landC = c + (dir[1] * landDist);
+                        if(landR < 0 || landR > 7 || landC < 0 || landC > 7) break;
+                        if(board[landR][landC] !== null) break; 
+                        moves.push({ to: {row: landR, col: landC}, type: 'capture', capturedRow: tr, capturedCol: tc });
+                        if(!isKing) break; 
+                        landDist++; 
+                    }
+                }
+                break;
+            }
+            if(!isKing) break; 
+            dist++;
+        }
+    });
+    return moves;
+}
+
+// =============================================================================
+// 6. RENDER E UTILS
 // =============================================================================
 
 function renderBoard() {
@@ -369,170 +604,15 @@ function highlightValidSquares(moves) {
     });
 }
 
-// --- Execução Local (Minha Jogada) ---
-function executeGameMove(fromRow, fromCol, moveData) {
-    const piece = boardState[fromRow][fromCol];
-    boardState[fromRow][fromCol] = null;
-    boardState[moveData.to.row][moveData.to.col] = piece;
-
-    if (moveData.type === 'capture') {
-        const dirR = moveData.to.row > fromRow ? 1 : -1;
-        const dirC = moveData.to.col > fromCol ? 1 : -1;
-        let r = fromRow + dirR;
-        let c = fromCol + dirC;
-        while(r !== moveData.to.row) {
-            if(boardState[r][c] !== null) boardState[r][c] = null;
-            r += dirR; c += dirC;
-            if(r < 0 || r > 7 || c < 0 || c > 7) break;
-        }
-    }
-
-    let nextMoves = calculateAllowedMoves(boardState, {row: moveData.to.row, col: moveData.to.col});
-    let hasCombo = false;
-    const nextKey = `${moveData.to.row}-${moveData.to.col}`;
-    
-    if(moveData.type === 'capture' && nextMoves[nextKey] && nextMoves[nextKey].some(m => m.type === 'capture')) {
-        hasCombo = true;
-    }
-
-    let promoted = false;
-    const isKingAlready = piece.includes('K');
-    const promotionRow = (myColor === 'red') ? 7 : 0;
-    // Código NOVO (Vira Dama assim que toca a linha)
-    if (!isKingAlready && moveData.to.row === promotionRow) {
-        const kingVal = (myColor === 'red') ? 'RK' : 'WK';
-        boardState[moveData.to.row][moveData.to.col] = kingVal;
-        promoted = true;
-    }
- 
-
-    // --- EFEITOS SONOROS (Eu Jogando) ---
-    if (promoted) playSound('king');
-    else if (moveData.type === 'capture') playSound('capture');
-    else playSound('move');
-
-    socket.emit('make_move', {
-        room: currentRoom,
-        move: {
-            from: { row: fromRow, col: fromCol },
-            to: { row: moveData.to.row, col: moveData.to.col },
-            type: moveData.type,
-            promoted: promoted,
-            keepTurn: hasCombo
-        }
-    });
-
-    if (hasCombo) {
-        mustCaptureWith = { row: moveData.to.row, col: moveData.to.col };
-        allowedMoves = nextMoves; 
-        updateTextStatus("COMBO! Jogue novamente.", true);
-    } else {
-        isMyTurn = false;
-        mustCaptureWith = null;
-        allowedMoves = {};
-        updateTextStatus("AGUARDANDO OPONENTE...", false);
-    }
-    if (checkNoPiecesGameOver()) return;
-    renderBoard();
-}
-
-// --- Cálculos de Regras ---
-function calculateAllowedMoves(currentState, specificPiece = null) {
-    let moves = {}; 
-    let maxCaptures = 0;
-
-    for(let r=0; r<8; r++){
-        for(let c=0; c<8; c++){
-            const p = currentState[r][c];
-            if(!p || !isMyPiece(p)) continue;
-            if(specificPiece && (r !== specificPiece.row || c !== specificPiece.col)) continue;
-
-            const possible = getPieceMoves(currentState, r, c, p);
-            if(possible.length > 0) {
-                possible.forEach(m => {
-                    if(m.type === 'capture') {
-                        m.chainLength = 1 + getMaxChain(currentState, m.to.row, m.to.col, m.capturedRow, m.capturedCol, p);
-                    } else { m.chainLength = 0; }
-                    
-                    if(m.chainLength > maxCaptures) maxCaptures = m.chainLength;
-                    const key = `${r}-${c}`;
-                    if(!moves[key]) moves[key] = [];
-                    moves[key].push(m);
-                });
-            }
-        }
-    }
-
-    let finalMoves = {};
-    Object.keys(moves).forEach(key => {
-        const validOptions = moves[key].filter(m => m.chainLength === maxCaptures);
-        if(maxCaptures > 0) {
-             if(validOptions.length > 0 && validOptions[0].type === 'capture') finalMoves[key] = validOptions;
-        } else {
-             if(validOptions.length > 0) finalMoves[key] = validOptions;
-        }
-    });
-    return finalMoves;
-}
-
-function getMaxChain(board, r, c, ignoreR, ignoreC, pieceValue) {
-    const moves = getPieceMoves(board, r, c, pieceValue);
-    const captures = moves.filter(m => m.type === 'capture' && (m.capturedRow !== ignoreR || m.capturedCol !== ignoreC));
-    return captures.length > 0 ? 1 : 0;
-}
-
-function getPieceMoves(board, r, c, piece) {
-    let moves = [];
-    const isKing = piece.includes('K');
-    const isRed = piece.startsWith('R');
-    const directions = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
-
-    directions.forEach(dir => {
-        let dist = 1;
-        while(true) {
-            const tr = r + (dir[0] * dist);
-            const tc = c + (dir[1] * dist);
-            if(tr < 0 || tr > 7 || tc < 0 || tc > 7) break;
-            const target = board[tr][tc];
-
-            if(target === null) {
-                if(!isKing) {
-                    const moveDir = isRed ? 1 : -1;
-                    if(dir[0] === moveDir && dist === 1) moves.push({to: {row: tr, col: tc}, type: 'simple'});
-                } else { moves.push({to: {row: tr, col: tc}, type: 'simple'}); }
-            } else {
-                const isEnemy = (isRed && target.startsWith('W')) || (!isRed && target.startsWith('R'));
-                if(isEnemy) {
-                    let landDist = dist + 1;
-                    while(true) {
-                        const landR = r + (dir[0] * landDist);
-                        const landC = c + (dir[1] * landDist);
-                        if(landR < 0 || landR > 7 || landC < 0 || landC > 7) break;
-                        if(board[landR][landC] !== null) break; 
-                        moves.push({ to: {row: landR, col: landC}, type: 'capture', capturedRow: tr, capturedCol: tc });
-                        if(!isKing) break; 
-                        landDist++; 
-                    }
-                }
-                break;
-            }
-            if(!isKing) break; 
-            dist++;
-        }
-    });
-    return moves;
-}
-
-// --- Utils ---
-function opponentColor(color) { return color === 'red' ? 'white' : 'red'; }
 function hasAnyCaptureRequired() { return Object.values(allowedMoves).some(list => list.some(m => m.type === 'capture')); }
-function isMyPiece(p) { if (!p) return false; const isRed = p.startsWith('R'); return (myColor === 'red' && isRed) || (myColor === 'white' && !isRed); }
+
 function updateTextStatus(msg, isHighlight) { 
     if(statusDiv) {
         statusDiv.textContent = msg; 
         statusDiv.style.color = isHighlight ? "#2ecc71" : "#fff"; 
     }
 }
+
 function checkNoPiecesGameOver() {
     let red=0, white=0;
     for (let r=0; r<8; r++) {
@@ -545,30 +625,64 @@ function checkNoPiecesGameOver() {
     if (red === 0 || white === 0) {
         const amIRed = (myColor === 'red');
         const myCount = amIRed ? red : white;
-        if (myCount === 0) showGameOverModal(false, "Você ficou sem peças.");
-        else showGameOverModal(true, "Oponente ficou sem peças.");
-        isMyTurn = false;
+        
+        let msg = "";
+        let didWin = false;
+
+        if (myCount === 0) {
+            msg = "Você ficou sem peças.";
+            didWin = false;
+        } else {
+            msg = "Oponente ficou sem peças.";
+            didWin = true;
+        }
+        
+        handleLocalGameOver(didWin, msg);
         return true;
     }
     return false;
 }
 
-// --- Modal ---
+function handleLocalGameOver(didWin, msg) {
+    if(isSinglePlayer) {
+        showGameOverModal(didWin, msg);
+        isMyTurn = false;
+    } else {
+        const winnerColor = didWin ? myColor : (myColor==='red'?'white':'red');
+        socket.emit('game_over', { room: currentRoom, winner: winnerColor, reason: msg });
+    }
+}
+
 function showGameOverModal(didWin, reasonText = "") {
     modalTitle.textContent = didWin ? "VITÓRIA!" : "FIM DE JOGO";
     modalTitle.style.color = didWin ? "#2ecc71" : "#e74c3c";
     modalMessage.textContent = (didWin ? "Você venceu! " : "Você perdeu. ") + reasonText;
     
-    // --- EFEITOS SONOROS (Vitória/Derrota) ---
     if(didWin) playSound('win');
     else playSound('lose');
 
     gameOverModal.classList.remove('hidden');
 }
 function hideGameOverModal() { gameOverModal.classList.add('hidden'); }
-function restartGame() { window.location.reload(); }
-function exitGame() { window.location.reload(); }
 
-// --- Config ---
+// Eventos do Servidor (Fim de Jogo Online)
+socket.on('opponent_left', () => {
+    if(!isSinglePlayer) showGameOverModal(true, "Oponente saiu da sala.");
+});
+
+socket.on('game_over', (data) => {
+    if(!isSinglePlayer) {
+        if(data.winner === myColor) showGameOverModal(true, "Oponente sem peças/movimentos.");
+        else showGameOverModal(false, "Você perdeu.");
+        isMyTurn = false;
+    }
+});
+
+socket.on('disconnect', () => {
+    updateTextStatus("Conexão perdida...", false);
+    if(statusDiv) statusDiv.style.color = "red";
+});
+
+// Extras
 function toggleConfig() { document.getElementById('config-panel').classList.toggle('hidden'); }
 function updatePieceColors() { renderBoard(); }
