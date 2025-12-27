@@ -3,18 +3,59 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Damas Online Python</title>
+    <title>DAMAS PRO - Salas Públicas</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    
-    </head>
+</head>
 <body>
-    <div class="container">
-        <h1>Damas Online (Python)</h1>
-        <div id="status">Conectando ao servidor...</div>
-        <div id="board"></div>
+
+    <div id="lobby-screen" class="container">
+        <h1>DAMAS ONLINE</h1>
+        
+        <div class="lobby-box">
+            <button onclick="createRoom()" class="btn-lobby">
+                <i class="fas fa-plus-circle"></i> CRIAR NOVA SALA
+            </button>
+            
+            <div class="divider">SALAS DISPONÍVEIS</div>
+            
+            <div id="rooms-list-container">
+                <p style="opacity: 0.6; font-size: 0.9rem;">Procurando salas...</p>
+            </div>
+        </div>
+        
+        <p id="lobby-status" style="margin-top: 15px; font-size: 0.8rem; opacity: 0.5;"></p>
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <div id="waiting-screen" class="container hidden">
+        <h2>SALA: <span id="display-room-code" style="color: #f1c40f;">----</span></h2>
+        <p>Aguardando alguém entrar...</p>
+        <div class="loader"></div>
+        <button onclick="location.reload()" class="btn-exit" style="margin-top: 20px;">Cancelar</button>
+    </div>
+
+    <div id="game-screen" class="container hidden">
+        <div id="status">Sua Vez</div>
+        <div id="board-container">
+            <div id="board"></div>
+        </div>
+        <button onclick="location.reload()" class="btn-exit" style="margin-top: 15px;">Sair</button>
+    </div>
+
+    <div id="game-over-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <h2 id="modal-title">FIM DE JOGO</h2>
+            <p id="modal-message">Resultado...</p>
+            <div class="modal-buttons">
+                <button onclick="location.reload()" class="btn-restart">Voltar ao Lobby</button>
+            </div>
+        </div>
+    </div>
+
+    <input type="hidden" id="myPieceColor" value="#c0392b">
+    <input type="hidden" id="oppPieceColor" value="#ecf0f1">
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.0/socket.io.min.js"></script>
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>
