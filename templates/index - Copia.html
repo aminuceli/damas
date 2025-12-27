@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DAMAS</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    
+    <button id="config-btn" onclick="toggleConfig()">
+        <i class="fas fa-palette"></i> Personalizar
+    </button>
+
+    <div id="config-panel" class="hidden">
+        <h3>Temas</h3>
+        
+        <label>Cor do Tabuleiro:</label>
+        <div class="theme-options">
+            <div class="theme-circle" style="background: linear-gradient(45deg, #eecfa1, #8b5a2b)" onclick="setBoardTheme('classic')"></div>
+            <div class="theme-circle" style="background: linear-gradient(45deg, #f0f0f0, #333)" onclick="setBoardTheme('monochrome')"></div>
+            <div class="theme-circle" style="background: linear-gradient(45deg, #b0e0e6, #4682b4)" onclick="setBoardTheme('ocean')"></div>
+        </div>
+
+        <label>Cor das Minhas Peças:</label>
+        <input type="color" id="myPieceColor" value="#c0392b" onchange="updatePieceColors()">
+        
+        <label>Cor do Oponente:</label>
+        <input type="color" id="oppPieceColor" value="#bdc3c7" onchange="updatePieceColors()">
+
+        <button onclick="toggleConfig()" style="margin-top: 15px; width: 100%;">Fechar</button>
+    </div>
+
+    <div class="container">
+        <h1>DAMAS</h1>
+        <div id="status">Conectando...</div>
+        <div id="board-container">
+            <div id="board"></div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

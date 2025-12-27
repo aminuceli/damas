@@ -1,22 +1,38 @@
 // =============================================================================
-// 1. CONFIGURAÇÃO DE CONEXÃO E VARIAVEIS GLOBAIS
+// 1. CONFIGURAÇÃO DE CONEXÃO E VARIÁVEIS GLOBAIS
 // =============================================================================
 const socket = io({
-    // Correção para estabilidade: Força WebSocket para evitar desconexões
     transports: ['websocket', 'polling'], 
     reconnection: true,
     reconnectionAttempts: 5
 });
 
-// -- Telas e Paineis (Lobby vs Jogo) --
+// --- SISTEMA DE ÁUDIO ---
+const audioEffects = {
+    move: new Audio('/static/sounds/move.mp3'),
+    capture: new Audio('/static/sounds/capture.mp3'),
+    king: new Audio('/static/sounds/king.mp3'),
+    win: new Audio('/static/sounds/win.mp3'),
+    lose: new Audio('/static/sounds/lose.mp3')
+};
+
+// Função auxiliar para tocar sons sem erro (caso o navegador bloqueie)
+function playSound(type) {
+    const audio = audioEffects[type];
+    if (audio) {
+        audio.currentTime = 0; // Reinicia o som se já estiver tocando
+        audio.play().catch(error => console.log("Erro ao reproduzir áudio:", error));
+    }
+}
+
+// -- Telas e Paineis --
 const lobbyScreen = document.getElementById('lobby-screen');
 const waitingScreen = document.getElementById('waiting-screen');
 const gameScreen = document.getElementById('game-screen');
 const lobbyStatus = document.getElementById('lobby-status');
 const roomCodeDisplay = document.getElementById('display-room-code');
 
-// A CORREÇÃO PRINCIPAL ESTAVA AQUI:
-// Faltava definir onde a lista de salas deve aparecer
+// Lista de salas
 const roomsContainer = document.getElementById('rooms-list-container'); 
 
 // -- Elementos do Jogo --
@@ -62,28 +78,23 @@ socket.on('connect', () => {
     if(lobbyStatus) lobbyStatus.innerText = "Conectado ao servidor.";
 });
 
-// Funções chamadas pelos botões do HTML
 function createRoom() {
     socket.emit('create_room');
 }
 
 function joinRoom(roomCode) {
-    // Envia o código da sala ao clicar no botão "JOGAR" da lista
     socket.emit('join_game', { room_code: roomCode });
 }
 
-// Resposta: Atualizar Lista de Salas (Recebido do servidor)
 socket.on('update_room_list', (rooms) => {
-    // Agora a variável roomsContainer existe, então o código funciona
     if(roomsContainer) {
-        roomsContainer.innerHTML = ''; // Limpa a lista atual para recriar
+        roomsContainer.innerHTML = ''; 
 
         if (rooms.length === 0) {
             roomsContainer.innerHTML = '<p style="opacity: 0.5; margin-top:10px;">Nenhuma sala disponível.<br>Crie uma!</p>';
             return;
         }
 
-        // Cria um botão para cada sala disponível na lista
         rooms.forEach(code => {
             const div = document.createElement('div');
             div.className = 'room-item';
@@ -96,7 +107,6 @@ socket.on('update_room_list', (rooms) => {
     }
 });
 
-// Quando eu crio a sala, vou para a tela de espera
 socket.on('room_created', (data) => {
     document.getElementById('display-room-code').innerText = data.room;
     lobbyScreen.classList.add('hidden');
@@ -114,19 +124,16 @@ socket.on('error_msg', (msg) => {
 socket.on('init_game', (data) => {
     console.log("JOGO INICIADO:", data);
     
-    // UI: Esconde Lobby/Espera e mostra o tabuleiro
     if(lobbyScreen) lobbyScreen.classList.add('hidden');
     if(waitingScreen) waitingScreen.classList.add('hidden');
     if(gameScreen) gameScreen.classList.remove('hidden');
     hideGameOverModal();
 
-    // Setup Lógico
     boardState = JSON.parse(JSON.stringify(initialBoard));
     myColor = data.color;
     currentRoom = data.room;
     isMyTurn = data.turn;
 
-    // Atualiza cores visuais (se o config panel existir)
     const myInput = document.getElementById('myPieceColor');
     const oppInput = document.getElementById('oppPieceColor');
     if(myInput && oppInput) {
@@ -151,12 +158,12 @@ socket.on('init_game', (data) => {
 socket.on('opponent_move', (data) => {
     const move = data.move || data; 
     
-    // 1. Aplica no tabuleiro local
+    // 1. Aplica movimento lógico
     const piece = boardState[move.from.row][move.from.col];
     boardState[move.from.row][move.from.col] = null;
     boardState[move.to.row][move.to.col] = piece;
 
-    // 2. Captura
+    // 2. Remove Captura
     if(move.type === 'capture') {
          const dirR = move.to.row > move.from.row ? 1 : -1;
          const dirC = move.to.col > move.from.col ? 1 : -1;
@@ -165,8 +172,7 @@ socket.on('opponent_move', (data) => {
          
          while(r !== move.to.row && c !== move.to.col) {
              if(boardState[r][c] !== null) boardState[r][c] = null;
-             r += dirR; 
-             c += dirC;
+             r += dirR; c += dirC;
              if(r < 0 || r > 7 || c < 0 || c > 7) break;
          }
     }
@@ -176,6 +182,11 @@ socket.on('opponent_move', (data) => {
         const opponentKing = (myColor === 'red') ? 'WK' : 'RK';
         boardState[move.to.row][move.to.col] = opponentKing;
     }
+
+    // --- EFEITOS SONOROS (Oponente) ---
+    if (move.promoted) playSound('king');
+    else if (move.type === 'capture') playSound('capture');
+    else playSound('move');
 
     // 4. Verifica Fim
     if (checkNoPiecesGameOver()) return;
@@ -201,7 +212,7 @@ socket.on('opponent_move', (data) => {
     renderBoard();
 });
 
-// Eventos de Fim de Jogo e Saída
+// Eventos de Fim de Jogo
 socket.on('opponent_left', (data) => {
     showGameOverModal(true, "Oponente saiu da sala.");
 });
@@ -213,7 +224,6 @@ socket.on('game_over', (data) => {
 });
 
 socket.on('disconnect', () => {
-    // Apenas avisa, não recarrega (evita loop)
     updateTextStatus("Conexão perdida...", false);
     if(statusDiv) statusDiv.style.color = "red";
 });
@@ -359,7 +369,7 @@ function highlightValidSquares(moves) {
     });
 }
 
-// --- Execução ---
+// --- Execução Local (Minha Jogada) ---
 function executeGameMove(fromRow, fromCol, moveData) {
     const piece = boardState[fromRow][fromCol];
     boardState[fromRow][fromCol] = null;
@@ -388,11 +398,18 @@ function executeGameMove(fromRow, fromCol, moveData) {
     let promoted = false;
     const isKingAlready = piece.includes('K');
     const promotionRow = (myColor === 'red') ? 7 : 0;
-    if (!isKingAlready && moveData.to.row === promotionRow && !hasCombo) {
+    // Código NOVO (Vira Dama assim que toca a linha)
+    if (!isKingAlready && moveData.to.row === promotionRow) {
         const kingVal = (myColor === 'red') ? 'RK' : 'WK';
         boardState[moveData.to.row][moveData.to.col] = kingVal;
         promoted = true;
     }
+ 
+
+    // --- EFEITOS SONOROS (Eu Jogando) ---
+    if (promoted) playSound('king');
+    else if (moveData.type === 'capture') playSound('capture');
+    else playSound('move');
 
     socket.emit('make_move', {
         room: currentRoom,
@@ -541,12 +558,17 @@ function showGameOverModal(didWin, reasonText = "") {
     modalTitle.textContent = didWin ? "VITÓRIA!" : "FIM DE JOGO";
     modalTitle.style.color = didWin ? "#2ecc71" : "#e74c3c";
     modalMessage.textContent = (didWin ? "Você venceu! " : "Você perdeu. ") + reasonText;
+    
+    // --- EFEITOS SONOROS (Vitória/Derrota) ---
+    if(didWin) playSound('win');
+    else playSound('lose');
+
     gameOverModal.classList.remove('hidden');
 }
 function hideGameOverModal() { gameOverModal.classList.add('hidden'); }
 function restartGame() { window.location.reload(); }
 function exitGame() { window.location.reload(); }
 
-// --- Funções de Config (Extras) ---
+// --- Config ---
 function toggleConfig() { document.getElementById('config-panel').classList.toggle('hidden'); }
 function updatePieceColors() { renderBoard(); }
